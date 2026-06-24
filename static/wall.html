@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Feats of Power</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; background: #0f172a; color: #e2e8f0; font: 16px/1.5 system-ui, sans-serif; }
+    .wrap { max-width: 880px; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+    h1 { font-size: 1.9rem; margin: 0 0 .25rem; }
+    .sub { color: #94a3b8; margin: 0 0 2rem; }
+    .empty { color: #64748b; text-align: center; padding: 4rem 0; }
+    .feat { border: 1px solid rgba(234,179,8,.35); border-radius: .8rem;
+            background: linear-gradient(180deg, rgba(234,179,8,.08), rgba(30,41,59,.3));
+            padding: 1.1rem 1.25rem; margin-bottom: 1rem; }
+    .feat h2 { margin: 0; font-size: 1.15rem; color: #fde68a; }
+    .feat .desc { color: #cbd5e1; margin: .25rem 0 .6rem; font-size: .9rem; }
+    .feat .count { color: #94a3b8; font-size: .8rem; }
+    .unlockers { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .6rem; }
+    .u { background: rgba(30,41,59,.6); border: 1px solid rgba(51,65,85,.6);
+         border-radius: 9999px; padding: .2rem .6rem; font-size: .8rem; }
+    .u .h { color: #64748b; font-size: .7rem; }
+    footer { color: #475569; font-size: .75rem; margin-top: 2rem; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🏆 Feats of Power</h1>
+    <p class="sub">Rare practice milestones, earned by players around the world. Cooperative — not ranked.</p>
+    <div id="wall"><p class="empty">Loading…</p></div>
+    <footer>Feats only. No songs, scores, or skills are shown here.</footer>
+  </div>
+  <script>
+    var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]; }); };
+    fetch('/api/wall').then(function (r) { return r.ok ? r.json() : []; }).then(function (feats) {
+      var host = document.getElementById('wall');
+      if (!feats.length) { host.innerHTML = '<p class="empty">No Feats have been earned yet. Be the first.</p>'; return; }
+      host.innerHTML = feats.map(function (f) {
+        var us = (f.unlockers || []).map(function (u) {
+          return '<span class="u">' + esc(u.name) + ' <span class="h">#' + esc(u.hash) + '</span></span>'; }).join('');
+        return '<div class="feat"><h2>' + esc(f.title) + '</h2>' +
+          '<div class="desc">' + esc(f.description || '') + '</div>' +
+          '<div class="count">' + f.count + ' unlocked</div>' +
+          '<div class="unlockers">' + us + '</div></div>';
+      }).join('');
+    }).catch(function () {
+      document.getElementById('wall').innerHTML = '<p class="empty">Could not load the wall right now.</p>';
+    });
+  </script>
+</body>
+</html>

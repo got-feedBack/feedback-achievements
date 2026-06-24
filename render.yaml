@@ -1,0 +1,28 @@
+# Render blueprint — feedback-achievements (Feats wall).
+#
+# OPERABILITY MUST-FIXES (gating, documented in README):
+#   * SINGLE INSTANCE ONLY. The rate-limiter is in-memory and SQLite lives on a
+#     persistent disk — running >1 instance would split state. numInstances=1,
+#     do not enable autoscaling.
+#   * NO IP RETENTION. `--no-access-log` keeps client IPs out of platform logs
+#     (IPs are also never written to any table). Do not remove the flag.
+#   * If you migrate to managed Postgres, use the migration tool (migrate.py)
+#     and point DATABASE_URL at it; keep the single-instance pin until the
+#     in-memory rate-limit is moved to a shared store.
+services:
+  - type: web
+    name: feedback-achievements
+    runtime: python
+    plan: starter
+    numInstances: 1
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT --no-access-log
+    disk:
+      name: wall-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: DATA_DIR
+        value: /var/data
+      - key: ACHIEVEMENTS_CLIENT_TOKEN
+        generateValue: true
