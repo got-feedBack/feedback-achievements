@@ -42,7 +42,14 @@ WALL_CACHE_TTL_S = 5
 app = FastAPI(title="feedback-achievements (Feats wall)")
 _lock = threading.Lock()
 _rate: dict[tuple[str, str], list[float]] = {}
-_wall_cache: dict = {"ts": 0.0, "data": None}
+# Sweep fully-expired rate buckets once the dict crosses this size so a
+# long-lived single instance can't leak one permanent entry per (hash, ip).
+_RATE_GC_THRESHOLD = 5000
+# Wall cache is version-gated: every write bumps _data_version; a get_wall build
+# only stores its result if no write landed mid-build (else it would pin a stale
+# snapshot for the whole TTL right after the first unlock). All access under _lock.
+_data_version = 0
+_wall_cache: dict = {"ts": 0.0, "data": None, "ver": -1}
 
 # Tiny, intentionally conservative profanity filter (obfuscation-grade, like the
 # token). Substring match on a short denylist; replace with a real lib in prod.
@@ -122,6 +129,11 @@ def _rate_ok(player_hash: str, ip: str) -> bool:
     key = (player_hash, ip)
     now = time.time()
     with _lock:
+        # Bound memory: when the table grows large, drop every bucket whose most
+        # recent hit has aged out of the window (cheap amortized sweep).
+        if len(_rate) > _RATE_GC_THRESHOLD:
+            for k in [k for k, v in _rate.items() if not v or now - v[-1] >= RATE_WINDOW_S]:
+                del _rate[k]
         hits = [t for t in _rate.get(key, []) if now - t < RATE_WINDOW_S]
         if len(hits) >= RATE_MAX:
             _rate[key] = hits
@@ -136,8 +148,14 @@ def _short(player_hash: str) -> str:
 
 
 def _invalidate_cache():
-    _wall_cache["ts"] = 0.0
-    _wall_cache["data"] = None
+    # Bump the data version under the lock so any get_wall build that read the DB
+    # before this write won't store its now-stale result (it checks the version
+    # back). Also clear the cached snapshot.
+    global _data_version
+    with _lock:
+        _data_version += 1
+        _wall_cache["ts"] = 0.0
+        _wall_cache["data"] = None
 
 
 # ── Models ───────────────────────────────────────────────────────────────────
@@ -209,13 +227,17 @@ def get_wall():
     # Hidden-until-first-global-unlock: only Feats with >=1 unlocker appear.
     # Cold start returns 200 [] (never 500). Short-TTL cache over the scan.
     now = time.time()
-    if _wall_cache["data"] is not None and now - _wall_cache["ts"] < WALL_CACHE_TTL_S:
-        return _wall_cache["data"]
+    with _lock:
+        if (_wall_cache["data"] is not None
+                and now - _wall_cache["ts"] < WALL_CACHE_TTL_S
+                and _wall_cache["ver"] == _data_version):
+            return _wall_cache["data"]
+        ver = _data_version          # snapshot the version this build is based on
     conn = _conn()
     try:
-        rows = conn.execute(
-            "SELECT achievement_id, display_name, player_hash FROM unlocks"
-        ).fetchall()
+        cur = conn.cursor()
+        cur.execute("SELECT achievement_id, display_name, player_hash FROM unlocks")
+        rows = cur.fetchall()
     finally:
         conn.close()
     by_feat: dict[str, list] = {}
@@ -238,8 +260,13 @@ def get_wall():
             "unlockers": sorted(unlockers, key=lambda u: u["name"].lower()),
         })
     out.sort(key=lambda f: (-f["count"], f["title"].lower()))
-    _wall_cache["ts"] = now
-    _wall_cache["data"] = out
+    with _lock:
+        # Only cache if no write landed while we were building — otherwise we'd
+        # pin a stale snapshot (e.g. an empty wall right after the first unlock).
+        if ver == _data_version:
+            _wall_cache["ts"] = now
+            _wall_cache["data"] = out
+            _wall_cache["ver"] = ver
     return out
 
 
@@ -249,15 +276,18 @@ def get_feats():
     # global unlock; the wall (above) reveals it once unlocked.
     conn = _conn()
     try:
-        unlocked_ids = {r["achievement_id"] for r in conn.execute(
-            "SELECT DISTINCT achievement_id FROM unlocks")}
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT achievement_id FROM unlocks")
+        unlocked_ids = {r["achievement_id"] for r in cur.fetchall()}
     finally:
         conn.close()
     out = []
     for f in FEATS:
-        item = {"id": f["id"], "title": f.get("title", f["id"]),
-                "secret": bool(f.get("secret", False))}
-        if not item["secret"] or f["id"] in unlocked_ids:
+        fid = f.get("id")
+        if not fid:
+            continue  # malformed catalogue entry — skip, never 500 the endpoint
+        item = {"id": fid, "title": f.get("title", fid), "secret": bool(f.get("secret", False))}
+        if not item["secret"] or fid in unlocked_ids:
             item["description"] = f.get("description", "")
         out.append(item)
     return {"version": 1, "feats": out}
