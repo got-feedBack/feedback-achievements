@@ -26,6 +26,7 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, Header, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from pydantic import BaseModel, Field
 
@@ -40,6 +41,18 @@ RATE_WINDOW_S = int(os.environ.get("RATE_WINDOW_S", "60"))
 WALL_CACHE_TTL_S = 5
 
 app = FastAPI(title="feedback-achievements (Feats wall)")
+# Read-only CORS so the marketing site (got-feedback.org) can render the wall
+# in-page. GET only — unlock/remove stay same-origin + token-gated as before.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=(
+        r"^https://(www\.)?got-feedback\.org$"
+        r"|^https://feedback-website-h5ds\.onrender\.com$"
+        r"|^http://localhost(:\d+)?$"
+    ),
+    allow_methods=["GET"],
+    allow_headers=[],
+)
 _lock = threading.Lock()
 _rate: dict[tuple[str, str], list[float]] = {}
 # Sweep fully-expired rate buckets once the dict crosses this size so a
