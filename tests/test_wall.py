@@ -2,7 +2,7 @@
 
 import sqlite3
 
-from conftest import TOKEN
+from conftest import ADMIN, TOKEN
 
 UNLOCK = {"display_name": "Ada", "player_hash": "deadbeefcafe1234",
           "achievement_id": "notes_total", "unlocked_at": "2026-06-24T00:00:00Z"}
@@ -58,6 +58,58 @@ def test_remove_deletes_all_rows_for_hash(client):
     assert client.get("/api/wall").json() == []
 
 
+def test_admin_removes_by_short_hash_the_wall_exposes(client):
+    # The wall only ever shows the 6-char short hash, so moderator takedown must
+    # work from that alone — otherwise nobody can action what they can see.
+    client.post("/api/unlock", json=UNLOCK, headers=TOKEN)
+    short = client.get("/api/wall").json()[0]["unlockers"][0]["hash"]
+    r = client.post("/api/remove", json={"player_hash": short}, headers=ADMIN)
+    assert r.json()["removed"] == 1
+    assert client.get("/api/wall").json() == []
+
+
+def test_short_hash_removal_needs_admin_token(client):
+    # THE point of the admin gate: the short hash is PUBLIC (it's on the wall)
+    # and the client token is not a secret. Without the admin token, a copied
+    # short hash must not delete anyone.
+    client.post("/api/unlock", json=UNLOCK, headers=TOKEN)
+    short = client.get("/api/wall").json()[0]["unlockers"][0]["hash"]
+    r = client.post("/api/remove", json={"player_hash": short}, headers=TOKEN)
+    assert r.json()["removed"] == 0
+    assert client.get("/api/wall").json()[0]["count"] == 1
+
+    bad = {"X-Client-Token": "fb-wall-v1", "X-Admin-Token": "wrong"}
+    assert client.post("/api/remove", json={"player_hash": short},
+                       headers=bad).json()["removed"] == 0
+    assert client.get("/api/wall").json()[0]["count"] == 1
+
+
+def test_remove_refuses_ambiguous_prefix(client):
+    client.post("/api/unlock", json=dict(UNLOCK, player_hash="abcd1111"), headers=TOKEN)
+    client.post("/api/unlock", json=dict(UNLOCK, player_hash="abcd2222"), headers=TOKEN)
+    r = client.post("/api/remove", json={"player_hash": "abcd"}, headers=ADMIN)
+    assert r.status_code == 409
+    assert client.get("/api/wall").json()[0]["count"] == 2  # nobody nuked
+
+
+def test_remove_exact_hash_wins_over_prefix_ambiguity(client):
+    # The app removes by FULL hash; a full hash that also prefixes a longer one
+    # must still delete exactly itself, not 409.
+    client.post("/api/unlock", json=dict(UNLOCK, player_hash="abcd1111"), headers=TOKEN)
+    client.post("/api/unlock", json=dict(UNLOCK, player_hash="abcd1111x"), headers=TOKEN)
+    r = client.post("/api/remove", json={"player_hash": "abcd1111"}, headers=ADMIN)
+    assert r.status_code == 200
+    assert r.json()["removed"] == 1
+    assert client.get("/api/wall").json()[0]["count"] == 1  # the longer hash survives
+
+
+def test_remove_wildcard_cannot_wipe_the_wall(client):
+    client.post("/api/unlock", json=UNLOCK, headers=TOKEN)
+    r = client.post("/api/remove", json={"player_hash": "%%%%"}, headers=ADMIN)
+    assert r.json()["removed"] == 0
+    assert client.get("/api/wall").json()[0]["count"] == 1
+
+
 def test_no_ip_column_anywhere(client):
     client.post("/api/unlock", json=UNLOCK, headers=TOKEN)
     db = sqlite3.connect(str(client._server.DB_PATH))
@@ -77,6 +129,12 @@ def test_display_name_refreshes_on_repost(client):
 
 def test_profanity_filtered(client):
     client.post("/api/unlock", json=dict(UNLOCK, display_name="fuckface"), headers=TOKEN)
+    assert client.get("/api/wall").json()[0]["unlockers"][0]["name"] == "(hidden)"
+
+
+def test_profanity_filter_is_case_insensitive(client):
+    # "Penis" got onto the live wall — the denylist missed the word entirely.
+    client.post("/api/unlock", json=dict(UNLOCK, display_name="Penis"), headers=TOKEN)
     assert client.get("/api/wall").json()[0]["unlockers"][0]["name"] == "(hidden)"
 
 
