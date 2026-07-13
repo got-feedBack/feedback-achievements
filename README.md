@@ -26,7 +26,7 @@ multi-user wall lives here as a separate service.
 | Method | Path           | Purpose |
 |--------|----------------|---------|
 | POST   | `/api/unlock`  | Record a Feat unlock `{display_name, player_hash, achievement_id, unlocked_at}`. Validates id ∈ catalogue, profanity-filters the name, rate-limits, upserts. Requires `X-Client-Token`. |
-| POST   | `/api/remove`  | Delete **all** rows for a `player_hash`. Succeeds on zero rows. Doubles as takedown-by-hash. Requires `X-Client-Token`. |
+| POST   | `/api/remove`  | Delete **all** rows for a `player_hash` (exact). Succeeds on zero rows. Requires `X-Client-Token`. With `X-Admin-Token` (= `ACHIEVEMENTS_ADMIN_TOKEN`, a real secret) it also accepts a **hash prefix** — i.e. the 6-char short hash the wall displays — which is the moderator takedown path. Ambiguous prefixes → `409`. Without the admin token a prefix matches nothing, so a copied short hash can't be used to delete other players. |
 | GET    | `/api/wall`    | Feats with ≥1 global unlock + unlocker list (name + short hash) + count. Cold start → `200 []`. Short-TTL cached. |
 | GET    | `/feats.json`  | Canonical catalogue. `secret` Feats hide their description until first global unlock. |
 | GET    | `/`            | Static read-only wall page. |

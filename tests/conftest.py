@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ACHIEVEMENTS_ADMIN_TOKEN", "test-admin")
     # Re-import server fresh so DATA_DIR / DB_PATH bind to tmp_path.
     for mod in ("server",):
         sys.modules.pop(mod, None)
@@ -25,3 +26,4 @@ def client(tmp_path, monkeypatch):
 
 
 TOKEN = {"X-Client-Token": "fb-wall-v1"}
+ADMIN = {"X-Client-Token": "fb-wall-v1", "X-Admin-Token": "test-admin"}

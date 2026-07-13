@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import sqlite3
 import threading
 import time
@@ -35,6 +36,9 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", str(BASE_DIR / "data")))
 DB_PATH = DATA_DIR / "wall.db"
 # Baked-in obfuscation token (NOT a secret). Override via env in deployment.
 CLIENT_TOKEN = os.environ.get("ACHIEVEMENTS_CLIENT_TOKEN", "fb-wall-v1")
+# A REAL secret, unlike CLIENT_TOKEN: unlocks moderator takedown by short hash
+# (see /api/remove). Unset → no prefix takedown, exact-hash deletes only.
+ADMIN_TOKEN = os.environ.get("ACHIEVEMENTS_ADMIN_TOKEN", "")
 # In-memory rate limit: max unlock POSTs per (hash, ip) per window.
 RATE_MAX = int(os.environ.get("RATE_MAX", "30"))
 RATE_WINDOW_S = int(os.environ.get("RATE_WINDOW_S", "60"))
@@ -66,7 +70,11 @@ _wall_cache: dict = {"ts": 0.0, "data": None, "ver": -1}
 
 # Tiny, intentionally conservative profanity filter (obfuscation-grade, like the
 # token). Substring match on a short denylist; replace with a real lib in prod.
-_PROFANITY = {"shit", "fuck", "cunt", "nigger", "faggot", "bitch", "asshole"}
+_PROFANITY = {"shit", "fuck", "cunt", "nigger", "faggot", "bitch", "asshole",
+              "penis", "wank", "twat"}
+# ponytail: substring match, so only low-collision words go in here — "cock"
+# would hide "Cocktail", "dick" would hide "Dickens". Swap in a real lib if the
+# list needs to grow.
 
 
 # ── Catalogue ────────────────────────────────────────────────────────────────
@@ -217,16 +225,44 @@ def post_unlock(body: UnlockIn, request: Request,
 
 
 @app.post("/api/remove")
-def post_remove(body: RemoveIn, x_client_token: str | None = Header(default=None)):
-    # Doubles as the takedown-by-hash moderation path. Succeeds on zero rows.
-    # Idempotent + ordered so a still-queued unlock can't resurrect the hash:
-    # the client stops re-sending after a removal; a late unlock would simply
-    # re-add, which is why takedown is the authoritative server-side delete.
+def post_remove(body: RemoveIn, x_client_token: str | None = Header(default=None),
+                x_admin_token: str | None = Header(default=None)):
+    # Self-service delete: exact player_hash only. The full hash is the player's
+    # de-facto capability (only their own client knows it), whereas the wall
+    # publishes the 6-char short hash — so prefix deletes are ADMIN-ONLY. With
+    # only the (public, obfuscation-grade) client token they'd let anyone wipe
+    # anyone off the wall by copying a short hash out of the page.
+    #
+    # Succeeds on zero rows. Idempotent: a still-queued unlock can re-add the
+    # hash, which is why takedown is the authoritative server-side delete.
     if x_client_token != CLIENT_TOKEN:
         return JSONResponse({"error": "bad client token"}, status_code=403)
+    is_admin = bool(ADMIN_TOKEN) and secrets.compare_digest(x_admin_token or "", ADMIN_TOKEN)
     conn = _conn()
     try:
-        cur = conn.execute("DELETE FROM unlocks WHERE player_hash=?", (body.player_hash,))
+        cur = conn.cursor()
+        target = body.player_hash
+        if is_admin:
+            # Moderator takedown from the short hash the wall actually exposes.
+            # substr() rather than LIKE: the input is untrusted and LIKE would
+            # read `%` / `_` as wildcards (a bare "%" would match — and delete —
+            # every row on the wall).
+            cur.execute(
+                "SELECT DISTINCT player_hash FROM unlocks "
+                "WHERE substr(player_hash, 1, length(?))=?",
+                (body.player_hash, body.player_hash),
+            )
+            matches = [r["player_hash"] for r in cur.fetchall()]
+            # An exact hash still wins: a full hash that happens to also prefix a
+            # longer one must delete itself, not 409.
+            if body.player_hash not in matches:
+                if len(matches) > 1:
+                    return JSONResponse(
+                        {"error": "ambiguous player_hash prefix", "matches": len(matches)},
+                        status_code=409)
+                if matches:
+                    target = matches[0]
+        cur.execute("DELETE FROM unlocks WHERE player_hash=?", (target,))
         conn.commit()
         removed = cur.rowcount
     finally:

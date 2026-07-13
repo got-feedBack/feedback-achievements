@@ -26,3 +26,7 @@ services:
         value: /var/data
       - key: ACHIEVEMENTS_CLIENT_TOKEN
         generateValue: true
+      # A real secret (unlike CLIENT_TOKEN): enables moderator takedown by the
+      # short hash shown on the wall. Unset → exact-hash deletes only.
+      - key: ACHIEVEMENTS_ADMIN_TOKEN
+        generateValue: true
