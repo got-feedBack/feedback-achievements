@@ -40,6 +40,25 @@ DATA_DIR=./data ACHIEVEMENTS_CLIENT_TOKEN=dev uvicorn server:app --reload --no-a
 
 Tests: `pip install -r requirements-test.txt && pytest -q`.
 
+## Configuration
+
+Environment variables read by `server.py`:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DATA_DIR` | `data/` next to `server.py` | Directory for the SQLite database (`wall.db`). Created if missing. |
+| `ACHIEVEMENTS_CLIENT_TOKEN` | `fb-wall-v1` | Value `/api/unlock` and `/api/remove` expect in `X-Client-Token`. The code treats it as a baked-in obfuscation token, not a secret. |
+| `ACHIEVEMENTS_ADMIN_TOKEN` | (unset) | A real secret. When set, `/api/remove` with a matching `X-Admin-Token` also accepts a hash prefix. Unset means exact-hash deletes only. |
+| `RATE_MAX` | `30` | Max unlock POSTs per (player hash, IP) per window. |
+| `RATE_WINDOW_S` | `60` | Rate-limit window, in seconds. |
+
+`migrate.py` reads two more:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DATABASE_URL` | (required) | Postgres target. Same as `--database-url`. |
+| `SQLITE_PATH` | `data/wall.db` | SQLite source, relative to the working directory. Same as `--sqlite`. |
+
 ## Deploy (Render) — operability must-fixes (gating)
 
 `render.yaml` is a ready blueprint. Three constraints are **not optional**:
